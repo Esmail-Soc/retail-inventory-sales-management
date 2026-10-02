@@ -1,0 +1,18 @@
+# Python & environment files
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+venv/
+.venv/
+
+# Sensitive local configs
+*password*
+*secret*
+*.key
+
+# IDE and OS metadata
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
