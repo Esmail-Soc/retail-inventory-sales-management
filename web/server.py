@@ -62,13 +62,100 @@ def query_one(sql, params=()):
     return rows[0] if rows else None
 
 
-def execute(sql, params=()):
+def _run(sql, params=()):
     cursor = get_db().cursor()
     try:
         cursor.execute(sql, params)
         return cursor.lastrowid
     finally:
         cursor.close()
+
+
+# ---------------------------------------------------------------------------
+# Some free online MySQL services do not allow triggers (they refuse CREATE TRIGGER
+# with error 1419, "You do not have the SUPER privilege"). On such a database the
+# six triggers from schema.sql cannot exist, so the program applies the very same
+# rules itself, inside the same transaction, right before/after the INSERT.
+# When the triggers exist in the database (the normal case, and what schema.sql
+# builds) nothing here runs and the database triggers do all the work.
+# Set RETAIL_EMULATE_TRIGGERS=1 to force this mode, or 0 to switch it off.
+# ---------------------------------------------------------------------------
+_INSERT_TABLE = re.compile(r"^\s*INSERT\s+INTO\s+`?(\w+)`?", re.IGNORECASE)
+
+
+def rule_error(message):
+    return mysql.connector.errors.DatabaseError(msg=message, errno=1644, sqlstate="45000")
+
+
+def emulate_triggers():
+    setting = os.environ.get("RETAIL_EMULATE_TRIGGERS", "").strip()
+    if setting in ("0", "1"):
+        return setting == "1"
+    key = ("auto", os.environ.get("RETAIL_DB_HOST", config.DB_HOST),
+           os.environ.get("RETAIL_DB_NAME", config.DB_NAME))
+    if key not in app.config:
+        row = query_one("SELECT COUNT(*) AS n FROM information_schema.triggers "
+                        "WHERE trigger_schema = DATABASE()")
+        app.config[key] = row["n"] < 6
+    return app.config[key]
+
+
+def _before_insert(table, params):
+    if table == "saleitem":
+        _, product_id, quantity, _ = params
+        row = query_one("SELECT stock_quantity FROM Product WHERE product_id = %s", (product_id,))
+        if row and row["stock_quantity"] < quantity:
+            raise rule_error("Not enough stock for this product")
+    elif table == "returns":
+        sale_item_id, quantity = params[0], params[1]
+        sold = query_one("SELECT quantity FROM SaleItem WHERE sale_item_id = %s", (sale_item_id,))
+        done = query_one("SELECT COALESCE(SUM(quantity), 0) AS n FROM Returns WHERE sale_item_id = %s",
+                         (sale_item_id,))
+        if sold and done["n"] + quantity > sold["quantity"]:
+            raise rule_error("Return quantity is more than the quantity sold")
+    elif table == "payment":
+        invoice_id, amount = params[0], params[1]
+        invoice = query_one("SELECT total_amount FROM Invoice WHERE invoice_id = %s", (invoice_id,))
+        paid = query_one("SELECT COALESCE(SUM(amount), 0) AS n FROM Payment WHERE invoice_id = %s",
+                         (invoice_id,))
+        if invoice and paid["n"] + amount > invoice["total_amount"]:
+            raise rule_error("Payment is more than the invoice amount")
+
+
+def _move_stock(product_id, kind, source, quantity, when, reference_id):
+    sign = "+" if kind == "IN" else "-"
+    _run(f"UPDATE Product SET stock_quantity = stock_quantity {sign} %s WHERE product_id = %s",
+         (quantity, product_id))
+    _run("""INSERT INTO StockMovement (product_id, movement_type, source, quantity, movement_date, reference_id)
+            VALUES (%s, %s, %s, %s, %s, %s)""",
+         (product_id, kind, source, quantity, when, reference_id))
+
+
+def _after_insert(table, params, new_id):
+    if table == "purchaseitem":
+        purchase_id, product_id, quantity = params[0], params[1], params[2]
+        row = query_one("SELECT purchase_date FROM Purchase WHERE purchase_id = %s", (purchase_id,))
+        _move_stock(product_id, "IN", "PURCHASE", quantity, row["purchase_date"], purchase_id)
+    elif table == "saleitem":
+        sale_id, product_id, quantity = params[0], params[1], params[2]
+        row = query_one("SELECT sale_date FROM Sale WHERE sale_id = %s", (sale_id,))
+        _move_stock(product_id, "OUT", "SALE", quantity, row["sale_date"], sale_id)
+    elif table == "returns":
+        item = query_one("SELECT product_id FROM SaleItem WHERE sale_item_id = %s", (params[0],))
+        row = query_one("SELECT return_date FROM Returns WHERE return_id = %s", (new_id,))
+        _move_stock(item["product_id"], "IN", "RETURN", params[1], row["return_date"], new_id)
+
+
+def execute(sql, params=()):
+    match = _INSERT_TABLE.match(sql)
+    table = match.group(1).lower() if match else ""
+    emulate = table in ("purchaseitem", "saleitem", "returns", "payment") and emulate_triggers()
+    if emulate:
+        _before_insert(table, params)
+    new_id = _run(sql, params)
+    if emulate:
+        _after_insert(table, params, new_id)
+    return new_id
 
 
 @contextmanager
@@ -167,6 +254,61 @@ def handle_bad_request(error):
 @app.errorhandler(405)
 def handle_wrong_method(error):
     return error_page("Page not found", "There is nothing at this address.", 405)
+
+
+SETUP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cloud_setup.sql")
+
+
+def run_sql_script(connection, path):
+    """Run an .sql file statement by statement. It understands DELIMITER lines."""
+    delimiter = ";"
+    pieces = []
+    count = 0
+    cursor = connection.cursor()
+    try:
+        with open(path, encoding="utf-8") as handle:
+            for raw in handle:
+                line = raw.rstrip("\n")
+                text = line.strip()
+                if text.upper().startswith("DELIMITER "):
+                    delimiter = text.split(None, 1)[1]
+                    continue
+                if not pieces and (not text or text.startswith("--")):
+                    continue
+                pieces.append(line)
+                if text.endswith(delimiter):
+                    statement = "\n".join(pieces).rstrip()
+                    statement = statement[:-len(delimiter)].rstrip()
+                    pieces = []
+                    if statement:
+                        cursor.execute(statement)
+                        count += 1
+    finally:
+        cursor.close()
+    return count
+
+
+@app.route("/setup-db")
+def setup_db():
+    """One-time helper: builds the tables on a new empty online database.
+    It only works when the RETAIL_SETUP_KEY setting exists and the same key is in the link,
+    and it refuses to run if the tables are already there."""
+    secret = os.environ.get("RETAIL_SETUP_KEY", "")
+    given = request.args.get("key", "")
+    if not secret or not secrets.compare_digest(secret, given):
+        abort(404)
+    text = {"Content-Type": "text/plain; charset=utf-8"}
+    exists = query_one("SELECT COUNT(*) AS n FROM information_schema.tables "
+                       "WHERE table_schema = DATABASE() AND table_name = 'Product'")
+    if exists and exists["n"]:
+        return "The tables already exist, so nothing was changed.", 200, text
+    statements = run_sql_script(get_db(), SETUP_FILE)
+    tables = query_one("SELECT COUNT(*) AS n FROM information_schema.tables "
+                       "WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE'")["n"]
+    views = query_one("SELECT COUNT(*) AS n FROM information_schema.views "
+                      "WHERE table_schema = DATABASE()")["n"]
+    return (f"Done. Ran {statements} statements. The database now has {tables} tables "
+            f"and {views} views. Open the home page now."), 200, text
 
 
 @app.route("/")
