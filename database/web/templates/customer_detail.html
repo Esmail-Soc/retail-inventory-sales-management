@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}{{ customer.name }}{% endblock %}
+
+{% block content %}
+<p class="crumb"><a href="{{ url_for('customers') }}">Customers</a></p>
+<h1>{{ customer.name }}</h1>
+<p class="lead">Phone: {{ customer.phone or "not given" }}. Email: {{ customer.email or "not given" }}.</p>
+
+<h2>Invoices</h2>
+{% if invoices %}
+  <table class="data">
+    <thead><tr><th>Invoice</th><th>Date</th><th class="num">Total (Rs.)</th><th class="num">Paid (Rs.)</th><th class="num">Balance (Rs.)</th><th>Status</th></tr></thead>
+    <tbody>
+    {% for r in invoices %}
+      {% set balance = r.total_amount - r.paid %}
+      <tr>
+        <td><a href="{{ url_for('invoice_detail', code=r.invoice_code) }}">{{ r.invoice_code }}</a></td>
+        <td>{{ r.invoice_date|dt }}</td>
+        <td class="num">{{ r.total_amount|money }}</td>
+        <td class="num">{{ r.paid|money }}</td>
+        <td class="num">{{ balance|money }}</td>
+        <td>{% if balance == 0 %}Paid{% elif r.paid == 0 %}<strong>Not paid</strong>{% else %}<strong>Part paid</strong>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="count">{{ invoices|length }} invoice{{ "" if invoices|length == 1 else "s" }}</p>
+{% else %}
+  <p class="empty">This customer has not bought anything yet.</p>
+{% endif %}
+{% endblock %}
