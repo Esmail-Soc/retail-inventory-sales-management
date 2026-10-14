@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% from "_macros.html" import field, lookup %}
+{% block title %}{{ "Edit product" if editing else "Add product" }}{% endblock %}
+
+{% block content %}
+<h1>{{ "Edit product" if editing else "Add product" }}</h1>
+
+{% if errors %}
+  <div class="problem" role="alert">
+    <strong>The product was not saved.</strong>
+    {% if errors.get("form") %}{{ errors["form"] }}{% else %}Fix the fields marked below and save again.{% endif %}
+  </div>
+{% endif %}
+
+<form class="stack" method="post"
+      action="{{ url_for('product_edit', product_id=product.product_id) if editing else url_for('product_new') }}"
+      novalidate>
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+
+  {% if editing %}
+    <div class="field">
+      <label>Product code</label>
+      <p class="fixed">{{ product.product_code }}</p>
+      <p class="hint">The code cannot be changed.</p>
+    </div>
+  {% else %}
+    {{ field("product_code", "Product code", values.get("product_code", ""), errors,
+             hint="Up to 20 letters or numbers, for example P024. It must be different for every product.") }}
+  {% endif %}
+
+  {{ field("product_name", "Product name", values.get("product_name", ""), errors) }}
+
+  {{ lookup("category_id", "new_category", "category", categories, "category_id", "category_name", values, errors) }}
+  {{ lookup("brand_id", "new_brand", "brand", brands, "brand_id", "brand_name", values, errors) }}
+
+  <div class="row">
+    {{ field("cost_price", "Cost price (Rs.)", values.get("cost_price", ""), errors,
+             hint="What the shop pays for one piece.") }}
+    {{ field("selling_price", "Selling price (Rs.)", values.get("selling_price", ""), errors,
+             hint="What the customer pays for one piece.") }}
+  </div>
+
+  {{ field("reorder_level", "Reorder level", values.get("reorder_level", ""), errors,
+           hint="The product is marked Low when the stock goes below this number.") }}
+
+  {% if editing %}
+    <div class="field">
+      <label>In stock now</label>
+      <p class="fixed">{{ product.stock_quantity }}</p>
+      <p class="hint">Stock changes only through purchases, sales and returns, so it cannot be typed here.</p>
+    </div>
+  {% else %}
+    <p class="hint">A new product starts with 0 in stock. Stock arrives when a purchase is recorded.</p>
+  {% endif %}
+
+  <div class="buttons">
+    <button class="btn" type="submit">{{ "Save changes" if editing else "Add product" }}</button>
+    <a class="btn secondary" href="{{ url_for('products') }}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

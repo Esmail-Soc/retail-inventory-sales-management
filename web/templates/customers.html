@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% from "_macros.html" import search_box %}
+{% block title %}Customers{% endblock %}
+
+{% block content %}
+<h1>Customers</h1>
+
+{{ search_box(url_for("customers"), search, "Search by name, phone or email") }}
+
+{% if rows %}
+  <table class="data">
+    <thead><tr><th>Name</th><th>Phone</th><th>Email</th><th></th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td>{{ r.name }}</td>
+        <td>{{ r.phone or "-" }}</td>
+        <td>{{ r.email or "-" }}</td>
+        <td class="actions"><a href="{{ url_for('customer_detail', customer_id=r.customer_id) }}">Purchase history</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="count">{{ rows|length }} customer{{ "" if rows|length == 1 else "s" }}</p>
+{% else %}
+  <p class="empty">No customer matches "{{ search }}". Try part of the name, the phone number or the email, or <a href="{{ url_for('customers') }}">show all customers</a>.</p>
+{% endif %}
+{% endblock %}

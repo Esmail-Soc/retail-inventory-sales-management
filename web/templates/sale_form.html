@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% from "_macros.html" import field, item_rows %}
+{% block title %}New sale{% endblock %}
+
+{% block content %}
+<p class="crumb"><a href="{{ url_for('invoices') }}">Invoices</a></p>
+<h1>New sale</h1>
+<p class="lead">Choose the customer and the products. When you save, the sale, its items and the invoice are stored together, and the stock goes down. If any step fails, nothing is saved.</p>
+
+{% if errors %}
+  <div class="problem" role="alert"><strong>The sale was not saved.</strong> {% if errors.get("form") %}{{ errors["form"] }}{% else %}Fix the fields marked below.{% endif %}</div>
+{% endif %}
+
+<form method="post" action="{{ url_for('sale_new') }}" novalidate
+      onsubmit="var b = this.querySelector('button[type=submit]'); b.disabled = true; b.textContent = 'Saving...';">
+  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+
+  <div class="stack">
+    <div class="field{% if errors.get('customer_id') %} has-error{% endif %}">
+      <label for="customer_id">Customer</label>
+      <select id="customer_id" name="customer_id">
+        {% for c in customers %}
+          <option value="{{ c.customer_id }}"{% if values.customer_id == c.customer_id|string %} selected{% endif %}>{{ c.name }}{% if c.phone %} ({{ c.phone }}){% endif %}</option>
+        {% endfor %}
+      </select>
+      {% if errors.get("customer_id") %}<p class="error-text">{{ errors["customer_id"] }}</p>{% endif %}
+    </div>
+  </div>
+
+  <h2>Products</h2>
+  {{ item_rows(rows, products, false, "sale") }}
+  <p class="hint">Leave unused rows empty. If the same product is chosen twice, the quantities are added.</p>
+
+  <div class="stack">
+    <h2>Payment</h2>
+    <div class="field{% if errors.get('payment') %} has-error{% endif %}">
+      <label for="payment">How does the customer pay?</label>
+      <select id="payment" name="payment">
+        <option value="full"{% if values.payment == "full" %} selected{% endif %}>Paid in full now</option>
+        <option value="part"{% if values.payment == "part" %} selected{% endif %}>Part payment now (enter the amount below)</option>
+        <option value="later"{% if values.payment == "later" %} selected{% endif %}>Pay later (nothing is paid now)</option>
+      </select>
+      {% if errors.get("payment") %}<p class="error-text">{{ errors["payment"] }}</p>{% endif %}
+    </div>
+    <div class="row">
+      {{ field("paid_amount", "Amount paid now (Rs.)", values.get("paid_amount", ""), errors, hint="Only needed for a part payment.") }}
+      <div class="field{% if errors.get('method') %} has-error{% endif %}">
+        <label for="method">Payment method</label>
+        <select id="method" name="method">
+          {% for m in methods %}<option value="{{ m }}"{% if values.method == m %} selected{% endif %}>{{ m }}</option>{% endfor %}
+        </select>
+        {% if errors.get("method") %}<p class="error-text">{{ errors["method"] }}</p>{% endif %}
+      </div>
+    </div>
+
+    <div class="buttons">
+      <button class="btn" type="submit">Save sale</button>
+      <a class="btn secondary" href="{{ url_for('invoices') }}">Cancel</a>
+    </div>
+  </div>
+</form>
+{% endblock %}
